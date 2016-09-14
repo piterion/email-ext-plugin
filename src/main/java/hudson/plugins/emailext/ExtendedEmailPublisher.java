@@ -25,6 +25,8 @@ import hudson.plugins.emailext.plugins.content.EmailExtScript;
 import hudson.plugins.emailext.plugins.content.TriggerNameContent;
 import hudson.plugins.emailext.watching.EmailExtWatchAction;
 import hudson.plugins.emailext.watching.EmailExtWatchJobProperty;
+import hudson.scm.SCMRevisionState;
+import hudson.scm.SVNRevisionState;
 import hudson.tasks.BuildStepMonitor;
 import hudson.tasks.MailMessageIdAction;
 import hudson.tasks.Notifier;
@@ -34,14 +36,17 @@ import java.io.IOException;
 import java.io.PrintStream;
 import java.io.PrintWriter;
 import java.io.StringWriter;
+import java.lang.reflect.Field;
 import java.net.ConnectException;
 import java.net.SocketException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 import java.util.Set;
 import java.util.logging.Level;
@@ -73,7 +78,6 @@ import org.kohsuke.stapler.DataBoundSetter;
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ImmutableMultimap;
 import com.google.common.collect.Multimap;
-
 /**
  * {@link Publisher} that sends notification e-mail.
  */
@@ -789,7 +793,8 @@ public class ExtendedEmailPublisher extends Notifier implements MatrixAggregatab
         return true;
     }
 
-    public BuildStepMonitor getRequiredMonitorService() {
+    @Override
+	public BuildStepMonitor getRequiredMonitorService() {
         return BuildStepMonitor.NONE;
     }
 
@@ -808,7 +813,7 @@ public class ExtendedEmailPublisher extends Notifier implements MatrixAggregatab
      */
     public static @CheckForNull
     Run<?, ?> getPreviousRun(@Nonnull Run<?, ?> run, TaskListener listener) {
-        Run<?, ?> previousRun = run.getPreviousBuild();
+		Run<?, ?> previousRun = findBaseLine(run, getRevisionState(run, listener), listener);
         if (previousRun != null && previousRun.isBuilding()) {
             listener.getLogger().println(Messages.ExtendedEmailPublisher__is_still_in_progress_ignoring_for_purpo(previousRun.getDisplayName()));
             return null;
@@ -816,6 +821,59 @@ public class ExtendedEmailPublisher extends Notifier implements MatrixAggregatab
             return previousRun;
         }
     }
+
+
+	private static @CheckForNull Run<?, ?> findBaseLine(@Nonnull Run<?, ?> build, Map<String, Long> thisRevisions, TaskListener listener) {
+		if (build instanceof AbstractBuild) {
+			AbstractBuild<?, ?> prev = ((AbstractBuild) build).getPreviousBuild();
+			if (prev != null) {
+				Map<String, Long> baseRevisionState = getRevisionState(prev, listener);
+				// check whether previous build contains the same svn url
+				// basically looking for a previous build on the same branch
+				boolean urlfound = true;
+				for (String url : thisRevisions.keySet()) {
+					if (!baseRevisionState.containsKey(url)) {
+						urlfound = false;
+					}
+				}
+				if (urlfound) {
+					return prev;
+				} else {
+					return findBaseLine(prev, thisRevisions, listener);
+				}
+			}
+		}
+		return null;
+	}
+
+
+	private static Map<String, Long> getRevisionState(@Nonnull Run<?, ?> run, TaskListener listener) {
+		SCMRevisionState revisionsFromBuild;
+		try {
+			revisionsFromBuild = ((AbstractBuild) run).getProject().getScm().calcRevisionsFromBuild(run, null, null, listener);
+			if (revisionsFromBuild instanceof SVNRevisionState) {
+				Field revisionsField = revisionsFromBuild.getClass().getDeclaredField("revisions");
+				revisionsField.setAccessible(true);
+				Map<String, Long> revisionsMap = (Map<String, Long>) revisionsField.get(revisionsFromBuild);
+				return revisionsMap;
+			}
+		} catch (IOException e) {
+			listener.getLogger().println("Error reading revision.txt file: " + e.getMessage());
+		} catch (InterruptedException e) {
+			listener.getLogger().println("Interrupted while reading revision.txt file: " + e.getMessage());
+		} catch (NoSuchFieldException e) {
+			listener.getLogger().println("Error getting SVNRevisionState: " + e.getMessage());
+		} catch (SecurityException e) {
+			listener.getLogger().println("Error getting SVNRevisionState: " + e.getMessage());
+		} catch (IllegalArgumentException e) {
+			listener.getLogger().println("Error getting SVNRevisionState: " + e.getMessage());
+		} catch (IllegalAccessException e) {
+			listener.getLogger().println("Error getting SVNRevisionState: " + e.getMessage());
+		}
+
+		return new HashMap<String, Long>();
+	}
+
 
     @Override
     public ExtendedEmailPublisherDescriptor getDescriptor() {
@@ -826,7 +884,8 @@ public class ExtendedEmailPublisher extends Notifier implements MatrixAggregatab
         return Jenkins.getActiveInstance().getDescriptorByType(ExtendedEmailPublisherDescriptor.class);
     }
 
-    public MatrixAggregator createAggregator(MatrixBuild matrixbuild,
+    @Override
+	public MatrixAggregator createAggregator(MatrixBuild matrixbuild,
             Launcher launcher, BuildListener buildlistener) {
         return new MatrixAggregator(matrixbuild, launcher, buildlistener) {
             @Override
