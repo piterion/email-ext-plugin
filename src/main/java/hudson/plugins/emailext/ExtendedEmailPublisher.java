@@ -813,13 +813,15 @@ public class ExtendedEmailPublisher extends Notifier implements MatrixAggregatab
      */
     public static @CheckForNull
     Run<?, ?> getPreviousRun(@Nonnull Run<?, ?> run, TaskListener listener) {
-		Run<?, ?> previousRun = findBaseLine(run, getRevisionState(run, listener), listener);
-        if (previousRun != null && previousRun.isBuilding()) {
+		Map<String, Long> thisRevisions = getRevisionState(run, listener);
+		Run<?, ?> previousRun = findBaseLine(run, thisRevisions, listener);
+		
+		while ((previousRun != null) && (previousRun.isBuilding())) {
             listener.getLogger().println(Messages.ExtendedEmailPublisher__is_still_in_progress_ignoring_for_purpo(previousRun.getDisplayName()));
-            return null;
-        } else {
-            return previousRun;
+            previousRun = findBaseLine(previousRun, thisRevisions, listener);
         }
+        return previousRun;
+        
     }
 
 

@@ -28,13 +28,17 @@ import hudson.Extension;
 import hudson.model.AbstractBuild;
 import hudson.model.Result;
 import hudson.model.Run;
+import hudson.model.TaskListener;
 import hudson.model.User;
+import hudson.plugins.emailext.ExtendedEmailPublisher;
 import hudson.plugins.emailext.ExtendedEmailPublisherContext;
 import hudson.plugins.emailext.ExtendedEmailPublisherDescriptor;
 import hudson.plugins.emailext.plugins.RecipientProvider;
 import hudson.plugins.emailext.plugins.RecipientProviderDescriptor;
 import hudson.scm.ChangeLogSet;
 import hudson.tasks.test.TestResult;
+import hudson.tasks.junit.CaseResult;
+import hudson.tasks.junit.SuiteResult;
 import hudson.tasks.test.AbstractTestResultAction;
 import java.io.PrintStream;
 import java.util.HashSet;
@@ -42,6 +46,7 @@ import java.util.Set;
 import javax.mail.internet.InternetAddress;
 import jenkins.model.Jenkins;
 import org.kohsuke.stapler.DataBoundConstructor;
+import org.kohsuke.stapler.export.Exported;
 
 /**
  * A recipient provider that assigns ownership of a failing test to the set of developers (including any initiator)
@@ -86,7 +91,7 @@ public class FailingTestSuspectsRecipientProvider extends RecipientProvider {
                     debug.send("Collecting builds where a test started failing...");
                     final HashSet<Run<?, ?>> buildsWhereATestStartedFailing = new HashSet<Run<?, ?>>();
                     for (final TestResult caseResult : testResultAction.getFailedTests()) {
-                        final Run<?, ?> runWhereTestStartedFailing = caseResult.getFailedSinceRun();
+                        final Run<?, ?> runWhereTestStartedFailing = getRunSinceFailed(currentRun, caseResult, context.getListener());
                         debug.send("  runWhereTestStartedFailing: %d", runWhereTestStartedFailing.getNumber());
                         buildsWhereATestStartedFailing.add(runWhereTestStartedFailing);
                     }
@@ -97,7 +102,7 @@ public class FailingTestSuspectsRecipientProvider extends RecipientProvider {
                     for (final Run<?, ?> buildWhereATestStartedFailing : buildsWhereATestStartedFailing) {
                         debug.send("  buildWhereATestStartedFailing: %d", buildWhereATestStartedFailing.getNumber());
                         buildsWithSuspects.add(buildWhereATestStartedFailing);
-                        Run<?, ?> previousBuildToCheck = buildWhereATestStartedFailing.getPreviousCompletedBuild();
+                        Run<?, ?> previousBuildToCheck = ExtendedEmailPublisher.getPreviousRun(buildWhereATestStartedFailing, context.getListener());
                         if (previousBuildToCheck != null) {
                             debug.send("    previousBuildToCheck: %d", previousBuildToCheck.getNumber());
                         }
@@ -118,7 +123,7 @@ public class FailingTestSuspectsRecipientProvider extends RecipientProvider {
                                 } else {
                                     debug.send("      previousResult was not better than FAILURE; adding to buildsWithSuspects; continuing search");
                                     buildsWithSuspects.add(previousBuildToCheck);
-                                    previousBuildToCheck = previousBuildToCheck.getPreviousCompletedBuild();
+                                    previousBuildToCheck = ExtendedEmailPublisher.getPreviousRun(previousBuildToCheck, context.getListener());
                                     if (previousBuildToCheck != null) {
                                         debug.send("    previousBuildToCheck: %d", previousBuildToCheck.getNumber());
                                     }
@@ -138,6 +143,35 @@ public class FailingTestSuspectsRecipientProvider extends RecipientProvider {
         }
     }
 
+
+    private Run<?, ?> getRunSinceFailed(Run<?, ?> build, TestResult caseResult, TaskListener listener) {
+    	Run<?, ?> prevBuild = ExtendedEmailPublisher.getPreviousRun(build, listener);
+    	if (prevBuild!=null) {
+    		TestResult prevResult = getTestResult(prevBuild, caseResult.getId(), listener);
+    		if (prevResult==null || prevResult.isPassed()) {
+    			return build;
+    		} else {
+    			return getRunSinceFailed(prevBuild, caseResult, listener);
+    		}
+    		
+    	} else {
+    		return build;
+    	}
+    }
+    
+	private TestResult getTestResult(Run<?, ?> build, String id, TaskListener listener) {
+        final AbstractTestResultAction<?> testResultAction = build.getAction(AbstractTestResultAction.class);
+        if (testResultAction != null) {
+            for (final TestResult caseResult : testResultAction.getFailedTests()) {
+            	if (id.equals(caseResult.getId())) {
+            		return caseResult;
+            	}
+            }
+        }
+        return null;
+	}
+
+    
     @Extension
     public static final class DescriptorImpl extends RecipientProviderDescriptor {
         @Override

@@ -37,6 +37,7 @@ import hudson.model.AbstractBuild;
 import hudson.model.Result;
 import hudson.model.Run;
 import hudson.model.User;
+import hudson.plugins.emailext.ExtendedEmailPublisher;
 import hudson.plugins.emailext.ExtendedEmailPublisherContext;
 import hudson.plugins.emailext.ExtendedEmailPublisherDescriptor;
 import hudson.plugins.emailext.plugins.RecipientProvider;
@@ -85,7 +86,7 @@ public class FirstFailingBuildSuspectsRecipientProvider extends RecipientProvide
                 Run<?, ?> candidate = currentRun;
                 while (candidate != null && candidate.getResult().isWorseOrEqualTo(Result.FAILURE)) {
                     firstFailedBuild = candidate;
-                    candidate = candidate.getPreviousCompletedBuild();
+                    candidate = ExtendedEmailPublisher.getPreviousRun(candidate, context.getListener());
                 }
                 if (firstFailedBuild instanceof AbstractBuild) {
                     buildsWithSuspects.add(firstFailedBuild);
